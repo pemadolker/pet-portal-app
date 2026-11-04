@@ -1,0 +1,317 @@
+# Local development stack: the 15 services plus PostgreSQL, Redis, etcd and Mailpit.
+# This is for developing and for CI. The real deployment is Kubernetes (pet-portal-config).
+#
+#   ./local/setup.sh            # once: generates passwords and the JWT key pair into local/.secrets/
+#   docker compose -f local/docker-compose.yml --env-file local/.secrets/.env up --build
+#
+# Website: http://localhost:8000   Mail inbox: http://localhost:8025
+name: pet-portal
+
+x-node: &node
+  build: { context: .., dockerfile: Dockerfile }
+  restart: unless-stopped
+  read_only: true
+  tmpfs: [/tmp]
+  environment: &node-env
+    DEPLOY_ENV: local
+    LOG_LEVEL: info
+    REDIS_URL: redis://redis:6379
+    ETCD_ENDPOINTS: http://etcd:2379
+    PGHOST: postgres
+    PGDATABASE: petportal
+    SHUTDOWN_DELAY_MS: "1000"
+    NODE_OPTIONS: --max-old-space-size=96
+  volumes:
+    - ./.secrets:/run/secrets:ro
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: petportal
+    command: ["postgres", "-c", "max_connections=300"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD", "pg_isready", "-U", "postgres"], interval: 3s, retries: 20 }
+
+  db-bootstrap:
+    image: postgres:16-alpine
+    env_file: .secrets/.env
+    environment: { PGHOST: postgres, PGUSER: postgres, PGPASSWORD: "${POSTGRES_PASSWORD}", PGDATABASE: petportal }
+    volumes: [../db/bootstrap.sh:/bootstrap.sh:ro]
+    entrypoint: ["sh", "/bootstrap.sh"]
+    depends_on: { postgres: { condition: service_healthy } }
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck: { test: ["CMD", "redis-cli", "ping"], interval: 3s, retries: 20 }
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.17
+    command: ["etcd", "--name=etcd0", "--data-dir=/etcd-data", "--listen-client-urls=http://0.0.0.0:2379", "--advertise-client-urls=http://etcd:2379"]
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports: ["8025:8025"]
+
+  frontend:
+    build: { context: ../frontend }
+    restart: unless-stopped
+    volumes: [./frontend-config.js:/usr/share/nginx/html/config.js:ro]
+
+  edge:
+    # Plays the part of the Ingress: / to frontend, /api to api-gateway.
+    image: nginx:1.27-alpine
+    ports: ["8000:80"]
+    volumes: [./edge.conf:/etc/nginx/conf.d/default.conf:ro]
+    depends_on: [frontend, api-gateway]
+
+  signup:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: signup } }
+    image: pet-portal/signup:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: signup
+      POD_NAME: signup
+      POD_IP: signup   # registry entry points at the compose service name
+      DB_SCHEMA: signup
+      PGUSER: svc_signup
+      PGPASSWORD: ${SIGNUP_DB_PASSWORD}
+      BOOTSTRAP_ADMIN_EMAIL: "${ADMIN_EMAIL}"
+      BOOTSTRAP_ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      etcd: { condition: service_started }
+
+  login:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: login } }
+    image: pet-portal/login:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: login
+      POD_NAME: login
+      POD_IP: login   # registry entry points at the compose service name
+      DB_SCHEMA: login
+      PGUSER: svc_login
+      PGPASSWORD: ${LOGIN_DB_PASSWORD}
+      JWT_PRIVATE_KEY_FILE: "/run/secrets/jwt-private.pem"
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      etcd: { condition: service_started }
+
+  profile:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: profile } }
+    image: pet-portal/profile:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: profile
+      POD_NAME: profile
+      POD_IP: profile   # registry entry points at the compose service name
+      DB_SCHEMA: profile
+      PGUSER: svc_profile
+      PGPASSWORD: ${PROFILE_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      etcd: { condition: service_started }
+
+  pet:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: pet } }
+    image: pet-portal/pet:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: pet
+      POD_NAME: pet
+      POD_IP: pet   # registry entry points at the compose service name
+      DB_SCHEMA: pet
+      PGUSER: svc_pet
+      PGPASSWORD: ${PET_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  search:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: search } }
+    image: pet-portal/search:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: search
+      POD_NAME: search
+      POD_IP: search   # registry entry points at the compose service name
+      DB_SCHEMA: search
+      PGUSER: svc_search
+      PGPASSWORD: ${SEARCH_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  shelter:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: shelter } }
+    image: pet-portal/shelter:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: shelter
+      POD_NAME: shelter
+      POD_IP: shelter   # registry entry points at the compose service name
+      DB_SCHEMA: shelter
+      PGUSER: svc_shelter
+      PGPASSWORD: ${SHELTER_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  favorites:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: favorites } }
+    image: pet-portal/favorites:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: favorites
+      POD_NAME: favorites
+      POD_IP: favorites   # registry entry points at the compose service name
+      DB_SCHEMA: favorites
+      PGUSER: svc_favorites
+      PGPASSWORD: ${FAVORITES_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  adoption:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: adoption } }
+    image: pet-portal/adoption:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: adoption
+      POD_NAME: adoption
+      POD_IP: adoption   # registry entry points at the compose service name
+      DB_SCHEMA: adoption
+      PGUSER: svc_adoption
+      PGPASSWORD: ${ADOPTION_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  review:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: review } }
+    image: pet-portal/review:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: review
+      POD_NAME: review
+      POD_IP: review   # registry entry points at the compose service name
+      DB_SCHEMA: review
+      PGUSER: svc_review
+      PGPASSWORD: ${REVIEW_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      etcd: { condition: service_started }
+
+  history:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: history } }
+    image: pet-portal/history:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: history
+      POD_NAME: history
+      POD_IP: history   # registry entry points at the compose service name
+      DB_SCHEMA: history
+      PGUSER: svc_history
+      PGPASSWORD: ${HISTORY_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  notification:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: notification } }
+    image: pet-portal/notification:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: notification
+      POD_NAME: notification
+      POD_IP: notification   # registry entry points at the compose service name
+      DB_SCHEMA: notification
+      PGUSER: svc_notification
+      PGPASSWORD: ${NOTIFICATION_DB_PASSWORD}
+      PUBLIC_URL: "http://localhost:8000"
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  email-worker:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: email-worker } }
+    image: pet-portal/email-worker:local
+    environment:
+      <<: *node-env
+      SERVICE_NAME: email-worker
+      POD_NAME: email-worker
+      POD_IP: email-worker   # registry entry points at the compose service name
+      SMTP_HOST: "mailpit"
+      SMTP_PORT: "1025"
+      SMTP_RATE_PER_SECOND: "5"
+    depends_on:
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  reporting:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: reporting } }
+    image: pet-portal/reporting:local
+    entrypoint: ["sh", "-c", "node /app/libs/common/migrate.js && exec node --require /app/libs/common/tracing.js /app/service/src/server.js"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: reporting
+      POD_NAME: reporting
+      POD_IP: reporting   # registry entry points at the compose service name
+      DB_SCHEMA: reporting
+      PGUSER: svc_reporting
+      PGPASSWORD: ${REPORTING_DB_PASSWORD}
+    depends_on:
+      db-bootstrap: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+
+  api-gateway:
+    <<: *node
+    build: { context: .., dockerfile: Dockerfile, args: { SERVICE: api-gateway } }
+    image: pet-portal/api-gateway:local
+    ports: ["8080:8080"]
+    environment:
+      <<: *node-env
+      SERVICE_NAME: api-gateway
+      POD_NAME: api-gateway
+      POD_IP: api-gateway   # registry entry points at the compose service name
+      JWT_PUBLIC_KEY_FILE: "/run/secrets/jwt-public.pem"
+    depends_on:
+      redis: { condition: service_healthy }
+      etcd: { condition: service_started }
+volumes:
+  pgdata:

@@ -1,0 +1,37 @@
+{
+  "name": "pet-portal-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pet Adoption Portal: 13 backend services and the api-gateway (DSO202 final project).",
+  "license": "UNLICENSED",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/unit/*.test.js",
+    "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.js",
+    "migrate": "node libs/common/migrate.js",
+    "lint": "node --check libs/common/*.js services/*/src/*.js"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "0.223.0",
+    "@opentelemetry/instrumentation": "0.223.0",
+    "@opentelemetry/instrumentation-http": "0.223.0",
+    "@opentelemetry/instrumentation-ioredis": "0.71.0",
+    "@opentelemetry/instrumentation-pg": "0.76.0",
+    "@opentelemetry/instrumentation-pino": "0.69.0",
+    "@opentelemetry/instrumentation-undici": "0.33.0",
+    "@opentelemetry/resources": "2.12.0",
+    "@opentelemetry/sdk-trace-base": "2.12.0",
+    "@opentelemetry/sdk-trace-node": "2.12.0",
+    "@opentelemetry/semantic-conventions": "1.44.0",
+    "ioredis": "6.0.0",
+    "jose": "6.2.15",
+    "nodemailer": "10.3.1",
+    "pg": "8.23.1",
+    "pino": "10.4.0",
+    "prom-client": "15.1.3"
+  }
+}
