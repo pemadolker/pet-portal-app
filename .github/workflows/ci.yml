@@ -47,8 +47,9 @@ jobs:
       - name: One-winner race (300 adopters, 10 pets)
         run: |
           set -a; . local/.secrets/.env; set +a
-          docker compose -f local/docker-compose.yml --env-file local/.secrets/.env exec -T etcd \
-            sh -c 'etcdctl put /pet-portal/local/config/gateway/auth_rate_limit_per_minute 100000 && etcdctl put /pet-portal/local/config/gateway/rate_limit_per_minute 100000'
+          dc="docker compose -f local/docker-compose.yml --env-file local/.secrets/.env"
+          $dc exec -T etcd etcdctl put /pet-portal/local/config/gateway/auth_rate_limit_per_minute 100000
+          $dc exec -T etcd etcdctl put /pet-portal/local/config/gateway/rate_limit_per_minute 100000
           sleep 2
           node tests/load/one-winner.mjs --base http://localhost:8000/api --users 300 --pets 10 --admin-email "$ADMIN_EMAIL" --admin-password "$ADMIN_PASSWORD"
       - name: Logs on failure
