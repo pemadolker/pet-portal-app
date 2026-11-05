@@ -93,8 +93,16 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-      - name: Push
-        run: docker push ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.tag.outputs.tag }}
+      - name: Push (only after a clean scan; rebuilt from the cache above, so it takes seconds)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service == 'frontend' && 'frontend' || '.' }}
+          build-args: |
+            SERVICE=${{ matrix.service }}
+            VERSION=${{ steps.tag.outputs.tag }}
+          tags: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.tag.outputs.tag }}
+          push: true
+          cache-from: type=gha,scope=${{ matrix.service }}
 
   deploy-dev:
     needs: build
