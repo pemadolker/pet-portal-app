@@ -45,7 +45,19 @@ async function keys() {
   return privateKey;
 }
 
-const timed = async (op, fn) => { const end = hashSeconds.startTimer({ op }); try { return await fn(); } finally { end(); } };
+// scrypt runs on libuv's small thread pool (4 threads), which Node also uses for DNS
+// lookups. Unlimited, a burst of sign-ups fills every thread, the lookup of "postgres"
+// for a new database connection waits more than 5 s and the request fails with a 500.
+// So at most SCRYPT_CONCURRENCY hashes run at once; the rest wait their turn in memory.
+const HASH_SLOTS = config.envInt('SCRYPT_CONCURRENCY', 2);
+let hashing = 0;
+const waiting = [];
+async function hashSlot(fn) {
+  if (hashing >= HASH_SLOTS) await new Promise((resolve) => waiting.push(resolve));
+  hashing++;
+  try { return await fn(); } finally { hashing--; waiting.shift()?.(); }
+}
+const timed = async (op, fn) => { const end = hashSeconds.startTimer({ op }); try { return await hashSlot(fn); } finally { end(); } };
 // Format: scrypt$<logN>$<r>$<p>$<salt b64>$<hash b64>, so parameters can be raised later
 // without breaking existing hashes.
 async function hashPassword(password) {
