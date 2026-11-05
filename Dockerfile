@@ -22,6 +22,11 @@ FROM ${NODE_IMAGE}
 ARG SERVICE
 ARG VERSION=dev
 RUN test -n "${SERVICE}" || (echo "build with --build-arg SERVICE=<name>" && false)
+# Latest Alpine security fixes, and no npm/corepack at runtime: the services never
+# use them, and they are the usual source of scanner findings in Node images.
+RUN apk upgrade --no-cache \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 
 LABEL org.opencontainers.image.title="pet-portal/${SERVICE}" \
       org.opencontainers.image.version="${VERSION}" \

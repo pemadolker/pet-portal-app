@@ -1,6 +1,10 @@
 # Frontend image: static files served by unprivileged nginx (UID 101, port 8080).
 # About 50 MB; under 10 MiB of memory at idle.
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:stable-alpine
+
+# Take the latest Alpine security fixes (the image scan fails on fixable critical CVEs).
+USER root
+RUN apk upgrade --no-cache
 
 ARG VERSION=dev
 LABEL org.opencontainers.image.title="pet-portal/frontend" \

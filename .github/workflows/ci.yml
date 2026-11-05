@@ -47,6 +47,7 @@ jobs:
       - name: One-winner race (300 adopters, 10 pets)
         run: |
           set -a; . local/.secrets/.env; set +a
+          # the etcd image has no shell, so call etcdctl directly
           dc="docker compose -f local/docker-compose.yml --env-file local/.secrets/.env"
           $dc exec -T etcd etcdctl put /pet-portal/local/config/gateway/auth_rate_limit_per_minute 100000
           $dc exec -T etcd etcdctl put /pet-portal/local/config/gateway/rate_limit_per_minute 100000
@@ -61,7 +62,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: true
+      fail-fast: false      # one failing image does not cancel the other 14
       matrix:
         service: [frontend, api-gateway, signup, login, profile, pet, search, shelter, favorites, adoption, review, history, notification, email-worker, reporting]
     steps:
@@ -86,7 +87,7 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
       - name: Scan (fail on fixable critical vulnerabilities)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25   # v0.36.0, pinned by commit
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25   # v0.36.0, pinned by commit (older tags were hijacked in March 2026)
         with:
           image-ref: ${{ env.REGISTRY }}/${{ matrix.service }}:${{ steps.tag.outputs.tag }}
           severity: CRITICAL
